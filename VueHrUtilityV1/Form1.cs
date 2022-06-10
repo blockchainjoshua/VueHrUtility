@@ -198,8 +198,10 @@ namespace VueHrUtilityV1
 
         public Task StartAsync(CancellationToken stoppingToken)
         {
+            var config = JsonFileReader.Read<ConfigurationModel>("config.json");
+            var interval = config.IntervalInMinutes != null && config.IntervalInMinutes != 0 ? config.IntervalInMinutes : 5;
             _timer = new System.Threading.Timer(DoWork, null, TimeSpan.Zero,
-                TimeSpan.FromSeconds(5));
+                TimeSpan.FromMinutes(interval));
 
             return Task.CompletedTask;
         }
