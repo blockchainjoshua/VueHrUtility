@@ -5,12 +5,16 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Data;
+using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Runtime.InteropServices;
+using System.Security.Policy;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -21,6 +25,12 @@ namespace VueHrUtilityV1
 
     public partial class Form1 : Form, IHostedService, IDisposable
     {
+        [DllImport("user32.dll")]
+        static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
+        static extern int GetWindowText(IntPtr hWnd, out string text, int count);
+
 
         //private const int CP_NOCLOSE_BUTTON = 0x200;
         //protected override CreateParams CreateParams
@@ -60,7 +70,7 @@ namespace VueHrUtilityV1
             {
                 Hide();
                 notifyIcon.Visible = true;
-                notifyIcon.ShowBalloonTip(1000);
+                //notifyIcon.ShowBalloonTip(1000);
             }
         }
         /// <summary>
@@ -113,7 +123,7 @@ namespace VueHrUtilityV1
         /// <summary>
         /// Screen Capture
         /// </summary>
-        private void CaptureMyScreen(ConfigurationModel config)
+        private async void CaptureMyScreen(ConfigurationModel config)
         {
             try
             {
@@ -132,6 +142,7 @@ namespace VueHrUtilityV1
                 //Creating a new Bitmap object
                 Bitmap captureBitmap = new Bitmap(screenWidth1, screenHeight1, PixelFormat.Format32bppArgb);
 
+
                 //Creating a Rectangle object which will capture our Current Screen
                 Rectangle captureRectangle = Screen.AllScreens[0].Bounds;
 
@@ -141,22 +152,55 @@ namespace VueHrUtilityV1
                 //Copying Image from The Screen
                 captureGraphics.CopyFromScreen(screenLeft, screenTop, 0, 0, captureBitmap.Size);
 
-                var fiilePath = CreatePath(config.FilePath + config.LastName +", " +config.FirstName + "\\" + DateTime.Now.ToString("MMMM") + "\\" + DateTime.Now.ToString("dddd , MM-dd-yyyy"));
-
-                if (Directory.Exists(fiilePath))
+                string base64String;
+                using (MemoryStream ms = new MemoryStream())
                 {
-                    //Saving the Image File
-                    captureBitmap.Save(fiilePath + "\\" + dateTimeNow + ".jpg", ImageFormat.Jpeg);
+                    captureBitmap.Save(ms, ImageFormat.Png);
+                    byte[] imageBytes = ms.ToArray();
+                    base64String = Convert.ToBase64String(imageBytes);
                 }
+
+                IntPtr hWnd = GetForegroundWindow();
+                if (hWnd != IntPtr.Zero)
+                {
+                    string text = "";
+                    GetWindowText(hWnd, out text, 256);
+                    Console.WriteLine("Current window title: " + text);
+                }
+                else
+                {
+                    Console.WriteLine("No active window found.");
+                }
+
+                //  var fiilePath = CreatePath(config.FilePath + config.LastName + ", " + config.FirstName + "\\" + DateTime.Now.ToString("MMMM") + "\\" + DateTime.Now.ToString("dddd , MM-dd-yyyy"));
+
+                //if (Directory.Exists(fiilePath))
+                //{
+                //    //Saving the Image File
+                //    //captureBitmap.Save(fiilePath + "\\" + dateTimeNow + ".jpg", ImageFormat.Jpeg);
+
+
+
+                //}
+                //Api call to get attendance by EmployeeId as of today
+                var handler = new HttpClientHandler();
+                HttpClient client = new HttpClient(handler);
+
+                var requestBody = new { CapturedImage = base64String, FilePath = config.FilePath + config.LastName + ", " + config.FirstName + "\\" + DateTime.Now.ToString("MMMM") + "\\" + DateTime.Now.ToString("dddd , MM-dd-yyyy"), FileName = dateTimeNow };
+                string requestBodyJson = JsonConvert.SerializeObject(requestBody);
+                var content = new StringContent(requestBodyJson, Encoding.UTF8, "application/json");
+
+                // Send the request
+                var response = await client.PostAsync(config.ScreenCapturedApi, content);
 
             }
 
             catch (Exception ex)
             {
-              
+
             }
         }
-
+        
         private void Form1_Load(object sender, EventArgs e)
         {
             var config = JsonFileReader.Read<ConfigurationModel>("config.json");
@@ -208,41 +252,51 @@ namespace VueHrUtilityV1
 
         private async void DoWork(object state)
         {
-            //Get configuration from config.json file
-            var config = JsonFileReader.Read<ConfigurationModel>("config.json");
-
-            //Parse break out from config file
-            TimeSpan breakOut = DateTime.Parse(config.BreakOut).TimeOfDay;
-
-            //Parse break in from config file
-            TimeSpan breakIn = DateTime.Parse(config.BreakIn).TimeOfDay;
-
-            //Api call url with employee ID
-            string url = config.ApiUrl + config.EmployeeId;
-
-            //Api call to get attendance by EmployeeId as of today
-            var handler = new HttpClientHandler();
-            HttpClient client = new HttpClient(handler);
-            string result = await client.GetStringAsync(url);
-
-            //Deserialize api call result
-            var attendance = JsonConvert.DeserializeObject<List<Attendance>>(result);
-
-            //Check if attendance from api call is not null or empty
-            if (attendance != null && attendance.Count() != 0)
+            try
             {
-                //Check if employee is timed in
-                var isTimedIn = attendance.Any(x => x.Status == "TimeIn");
-                //Check if employee is timed out
-                var isTimedOut = attendance.Any(x => x.Status == "TimeOut");
+                //Get configuration from config.json file
+                var config = JsonFileReader.Read<ConfigurationModel>("config.json");
 
-                var isBreakTIme = (DateTime.Now.TimeOfDay > breakOut) && (DateTime.Now.TimeOfDay < breakIn);
+                //Parse break out from config file
+                TimeSpan breakOut = DateTime.Parse(config.BreakOut).TimeOfDay;
 
-                if (isTimedIn && !isTimedOut && !isBreakTIme)
+                //Parse break in from config file
+                TimeSpan breakIn = DateTime.Parse(config.BreakIn).TimeOfDay;
+
+                //Api call url with employee ID
+                string url = config.ApiUrl + config.EmployeeId;
+
+                //Api call to get attendance by EmployeeId as of today
+                var handler = new HttpClientHandler()
                 {
-                    //Check if the current time is not between beaktime from config file
-                    CaptureMyScreen(config);
+                    ServerCertificateCustomValidationCallback = (sender, cert, chain, sslPolicyErrors) => true
+                };
+                HttpClient client = new HttpClient(handler);
+                string result = await client.GetStringAsync(url);
+
+                //Deserialize api call result
+                var attendance = JsonConvert.DeserializeObject<List<Attendance>>(result);
+
+                //Check if attendance from api call is not null or empty
+                if (attendance != null && attendance.Count() != 0)
+                {
+                    //Check if employee is timed in
+                    var isTimedIn = attendance.Any(x => x.Status == "TimeIn");
+                    //Check if employee is timed out
+                    var isTimedOut = attendance.Any(x => x.Status == "TimeOut");
+
+                    var isBreakTIme = (DateTime.Now.TimeOfDay > breakOut) && (DateTime.Now.TimeOfDay < breakIn);
+
+                    if (isTimedIn && !isTimedOut && !isBreakTIme)
+                    {
+                        //Check if the current time is not between beaktime from config file
+                        CaptureMyScreen(config);
+                    }
                 }
+            }
+            catch (Exception ex)
+            {
+
             }
         }
 

@@ -15,6 +15,7 @@ namespace VueHrUtilityV1.Models
         public string FirstName { get; set; }
         public string BreakOut { get; set; }
         public string BreakIn { get; set; }
+        public string ScreenCapturedApi { get; set; }
         public int IntervalInMinutes { get; set; }
     }
 }
